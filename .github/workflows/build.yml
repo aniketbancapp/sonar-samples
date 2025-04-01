@@ -23,26 +23,37 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Ensures the full repo history is available
+          fetch-depth: 0
+          path: 'src'  # Explicitly set working directory
 
-      - name: Verify Repository Structure
+      - name: Debug Repository Structure
         run: |
-          echo "Listing files in working directory:"
-          ls -la
+          echo "Current working directory: $(pwd)"
+          echo "Repository contents:"
+          ls -R
 
-      - name: Ensure package.json Exists
+      - name: Find package.json
+        id: find-package
         run: |
-          if [ ! -f "package.json" ]; then
-            echo "ERROR: package.json not found! Ensure you are in the correct working directory."
+          # Search for package.json in the repository
+          PACKAGE_JSON_PATH=$(find . -name package.json -print -quit)
+          
+          if [ -z "$PACKAGE_JSON_PATH" ]; then
+            echo "ERROR: No package.json found in the repository!"
             exit 1
           fi
+          
+          echo "Found package.json at: $PACKAGE_JSON_PATH"
+          echo "directory=$(dirname "$PACKAGE_JSON_PATH")" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
+          working-directory: ${{ steps.find-package.outputs.directory }}
 
       - name: Install Dependencies and Run Tests
+        working-directory: ${{ steps.find-package.outputs.directory }}
         run: |
           npm install
           npm run test -- --coverage
@@ -59,14 +70,15 @@ jobs:
           args: >
             -Dsonar.projectKey=sonar
             -Dsonar.projectName="Sonar Samples"
-            -Dsonar.sources=src
-            -Dsonar.tests=test
+            -Dsonar.sources=${{ steps.find-package.outputs.directory }}
+            -Dsonar.tests=${{ steps.find-package.outputs.directory }}/test
             -Dsonar.sourceEncoding=UTF-8
-            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.javascript.lcov.reportPaths=${{ steps.find-package.outputs.directory }}/coverage/lcov.info
             -Dsonar.qualitygate.wait=true
             -Dsonar.coverage.exclusions=**/node_modules/**,**/test/**
             -Dsonar.cpd.exclusions=**/node_modules/**
 
+      # Rest of your workflow remains the same...
       - name: Install jq and bc
         run: |
           sudo apt-get update
