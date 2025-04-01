@@ -55,7 +55,7 @@ jobs:
             echo "Code quality meets 15 requirements."
             echo "quality_passed=true" >> $GITHUB_OUTPUT
           else
-            echo "Code quality does not meet requirements."
+            echo "Code quality does not 155 meet requirements."
             echo "quality_passed=false" >> $GITHUB_OUTPUT
           fi
 
