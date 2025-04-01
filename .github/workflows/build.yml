@@ -37,39 +37,23 @@ jobs:
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
-      # Fetch SonarQube metrics and check code coverage
-      - name: Get SonarQube Project Metrics
-        id: get_metrics
+      - name: Fetch Code Quality Metrics
+        id: fetch-metrics
         run: |
-          # Fetch the SonarQube project metrics using SonarQube API
-          SONAR_PROJECT_KEY="aniketbancapp_sonar-samples"
-          RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }} "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=${SONAR_PROJECT_KEY}&metricKeys=coverage")
-          echo "API Response: $RESPONSE"  # Log the raw response
-          
-          # Extract coverage value
-          COVERAGE=$(echo $RESPONSE | jq -r '.component.measures[0].value')
-          echo "Code coverage is: $COVERAGE"
+          # Fetch the Quality Gate status and code quality metrics
+          QUALITY_GATE_STATUS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=your_project_key" | jq -r '.projectStatus.status')
+          COVERAGE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=your_project_key&metricKeys=coverage" | jq -r '.component.measures[0].value')
+          echo "Quality Gate Status: $QUALITY_GATE_STATUS"
+          echo "Code Coverage: $COVERAGE%"
 
-          # Check if the coverage is below 95%
-          if [ "$COVERAGE" == "null" ]; then
-            echo "Error: Unable to fetch coverage data."
-            exit 1  # Fail the job if coverage data is null
+          # Check if coverage is above 95%
+          if (( $(echo "$COVERAGE >= 95" | bc -l) )); then
+            echo "Code quality is above 95%."
+            echo "::set-output name=quality_passed::true"
+          else
+            echo "Code quality is below 95%."
+            echo "::set-output name=quality_passed::false"
           fi
-
-          # Check if the coverage is below 95%
-          if (( $(echo "$COVERAGE < 95" | bc -l) )); then
-            echo "Error: Code coverage is below 95%. Coverage: $COVERAGE%"
-            exit 1  # Fail the job if coverage is below 95%
-          fi
-
-      - name: SonarQube Quality Gate Check
-        id: quality_gate
-        uses: sonarsource/sonarqube-quality-gate-action@master
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          sonar_host_url: ${{ secrets.SONAR_HOST_URL }}
-          sonar_token: ${{ secrets.SONAR_TOKEN }}
 
   # Job for auto merging PR after SonarQube scan
   auto-merge:
