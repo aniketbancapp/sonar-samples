@@ -54,7 +54,7 @@ jobs:
 
       - name: SonarQube Quality Gate Check
         id: quality_gate
-        uses: sonarsource/sonarqube-quality-gate-action@v2
+        uses: sonarsource/sonarqube-quality-gate-action@master  # Use the latest stable master branch
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
