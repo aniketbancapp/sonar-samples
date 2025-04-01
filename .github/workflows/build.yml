@@ -20,20 +20,32 @@ jobs:
       quality_status: ${{ steps.fetch-metrics.outputs.quality_status }}
       coverage: ${{ steps.fetch-metrics.outputs.coverage }}
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
+
+      - name: Verify Repository Structure
+        run: |
+          echo "Listing files in the working directory:"
+          ls -la
+
+      - name: Ensure package.json Exists
+        run: |
+          if [ ! -f "package.json" ]; then
+            echo "ERROR: package.json not found! Ensure you are in the correct working directory."
+            exit 1
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      - name: Install dependencies and generate coverage
+      - name: Install Dependencies and Generate Coverage
         run: |
           npm install
           npm run test -- --coverage
-          # Verify coverage file exists
           ls -la coverage/
           cat coverage/lcov.info || echo "No coverage file found"
 
@@ -65,7 +77,6 @@ jobs:
       - name: Fetch Code Quality Metrics
         id: fetch-metrics
         run: |
-          # Wait for analysis to complete
           sleep 20
           
           PROJECT_KEY="sonar"
@@ -75,7 +86,6 @@ jobs:
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             echo "Attempt $((RETRY_COUNT+1)) to fetch metrics..."
             
-            # Verify project exists first
             PROJECT_EXISTS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
               "${{ secrets.SONAR_HOST_URL }}/api/projects/search?projects=$PROJECT_KEY" | \
               jq -r '.components[0].key // empty')
@@ -87,26 +97,21 @@ jobs:
               continue
             fi
             
-            # Get quality gate status
             QUALITY_GATE_STATUS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
               "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY" | \
               jq -r '.projectStatus.status // "ERROR"')
             
-            # Get all metrics in one call
             METRICS_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
               "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage,duplicated_lines_density,bugs,vulnerabilities,code_smells")
-            
-            # Check for API errors
+
             if echo "$METRICS_RESPONSE" | jq -e '.errors' > /dev/null; then
               ERROR_MSG=$(echo "$METRICS_RESPONSE" | jq -r '.errors[0].msg')
               echo "ERROR: $ERROR_MSG"
-              echo "Check token permissions (needs 'Browse')"
               RETRY_COUNT=$((RETRY_COUNT+1))
               sleep 10
               continue
             fi
             
-            # Parse metrics with defaults
             COVERAGE=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "coverage").value? // "0"')
             DUPLICATION=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "duplicated_lines_density").value? // "0"')
             BUGS=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "bugs").value? // "0"')
@@ -122,46 +127,12 @@ jobs:
           done
           
           if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-            echo "Failed to fetch metrics after $MAX_RETRIES attempts"
+            echo "Failed to fetch metrics"
             COVERAGE="0"
             QUALITY_GATE_STATUS="ERROR"
           fi
 
-          # Create quality status message
-          QUALITY_STATUS_MESSAGE=$(cat <<EOF
-          SonarQube Quality Report:
-          - Quality Gate Status: $QUALITY_GATE_STATUS
-          - Code Coverage: $COVERAGE%
-          - Duplication: $DUPLICATION%
-          - Bugs: $BUGS
-          - Vulnerabilities: $VULNERABILITIES
-          - Code Smells: $CODE_SMELLS
-          EOF
-          )
-
-          # Output to GitHub summary
-          echo "### SonarQube Quality Report" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Quality Gate Status | $QUALITY_GATE_STATUS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Code Coverage | $COVERAGE% |" >> $GITHUB_STEP_SUMMARY
-          echo "| Duplication | $DUPLICATION% |" >> $GITHUB_STEP_SUMMARY
-          echo "| Bugs | $BUGS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Vulnerabilities | $VULNERABILITIES |" >> $GITHUB_STEP_SUMMARY
-          echo "| Code Smells | $CODE_SMELLS |" >> $GITHUB_STEP_SUMMARY
-
-          echo "$QUALITY_STATUS_MESSAGE"
-          
-          # Check if coverage is above 95% and quality gate passed
-          if (( $(echo "$COVERAGE >= 95" | bc -l) )) && [ "$QUALITY_GATE_STATUS" = "OK" ]; then
-            echo "quality_passed=true" >> $GITHUB_OUTPUT
-          else
-            echo "quality_passed=false" >> $GITHUB_OUTPUT
-          fi
-          
-          echo "quality_status<<EOF" >> $GITHUB_OUTPUT
-          echo "$QUALITY_STATUS_MESSAGE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "quality_passed=$( [ "$QUALITY_GATE_STATUS" = "OK" ] && [ "$(echo "$COVERAGE >= 95" | bc -l)" -eq 1 ] && echo "true" || echo "false" )" >> $GITHUB_OUTPUT
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
 
   auto-merge:
@@ -177,11 +148,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gh
-
-      - name: Display Quality Status
-        run: |
-          echo "${{ needs.sonarqube-scan.outputs.quality_status }}"
-          echo "Coverage: ${{ needs.sonarqube-scan.outputs.coverage }}%"
 
       - name: Auto Merge PR
         env:
@@ -199,6 +165,6 @@ jobs:
     steps:
       - name: Display Quality Status
         run: |
-          echo "${{ needs.sonarqube-scan.outputs.quality_status }}"
+          echo "Quality Status: ${{ needs.sonarqube-scan.outputs.quality_status }}"
           echo "Coverage: ${{ needs.sonarqube-scan.outputs.coverage }}%"
           echo "Quality Check Passed: ${{ needs.sonarqube-scan.outputs.quality_passed }}"
