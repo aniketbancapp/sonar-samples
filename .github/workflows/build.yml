@@ -29,6 +29,13 @@ jobs:
         with:
           node-version: '18'
 
+      - name: Install dependencies and run tests with coverage
+        run: |
+          npm install
+          npm run test -- --coverage
+          ls -la coverage/
+          cat coverage/lcov.info || echo "No coverage file found"
+
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master
         env:
@@ -39,11 +46,15 @@ jobs:
             -Dsonar.projectKey=aniketbancapp_sonar-samples
             -Dsonar.projectName="Sonar Samples"
             -Dsonar.projectVersion=1.0
-            -Dsonar.sources=.
+            -Dsonar.sources=src
+            -Dsonar.tests=test
             -Dsonar.sourceEncoding=UTF-8
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.scm.provider=git
+            -Dsonar.analysis.allowEmpty=false
+            -Dsonar.qualitygate.wait=true
 
       - name: Install jq and bc
         run: |
@@ -53,23 +64,26 @@ jobs:
       - name: Fetch Code Quality Metrics
         id: fetch-metrics
         run: |
-          # Fetch the Quality Gate status and code quality metrics
+          # Wait for analysis to complete
+          sleep 15
+          
           PROJECT_KEY="aniketbancapp_sonar-samples"
-          echo "Fetching quality gate status..."
-          QUALITY_GATE_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY")
-          echo "Quality Gate Response: $QUALITY_GATE_RESPONSE"
-          QUALITY_GATE_STATUS=$(echo "$QUALITY_GATE_RESPONSE" | jq -r '.projectStatus.status')
           
-          echo "Fetching coverage..."
-          COVERAGE_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage")
-          echo "Coverage Response: $COVERAGE_RESPONSE"
-          COVERAGE=$(echo "$COVERAGE_RESPONSE" | jq -r '.component.measures[0].value // "0"')
+          # Get quality gate status
+          QUALITY_GATE_STATUS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
+            "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY" | \
+            jq -r '.projectStatus.status')
+            
+          # Get all metrics in one API call
+          METRICS_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
+            "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage,duplicated_lines_density,bugs,vulnerabilities,code_smells")
           
-          echo "Fetching other metrics..."
-          DUPLICATION=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=duplicated_lines_density" | jq -r '.component.measures[0].value // "0"')
-          BUGS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=bugs" | jq -r '.component.measures[0].value // "0"')
-          VULNERABILITIES=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=vulnerabilities" | jq -r '.component.measures[0].value // "0"')
-          CODE_SMELLS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=code_smells" | jq -r '.component.measures[0].value // "0"')
+          # Parse metrics
+          COVERAGE=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "coverage").value // "0"')
+          DUPLICATION=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "duplicated_lines_density").value // "0"')
+          BUGS=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "bugs").value // "0"')
+          VULNERABILITIES=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "vulnerabilities").value // "0"')
+          CODE_SMELLS=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "code_smells").value // "0"')
 
           # Create quality status message
           QUALITY_STATUS_MESSAGE=$(cat <<EOF
@@ -83,7 +97,7 @@ jobs:
           EOF
           )
 
-          # Output quality status to job summary
+          # Output to GitHub job summary
           echo "### SonarQube Quality Report" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -121,6 +135,11 @@ jobs:
         run: |
           echo "${{ needs.sonarqube-scan.outputs.quality_status }}"
           echo "Coverage: ${{ needs.sonarqube-scan.outputs.coverage }}%"
+
+      - name: Install GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh
 
       - name: Auto Merge PR
         env:
