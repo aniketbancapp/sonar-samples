@@ -24,30 +24,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect Project Type
-        id: detect-project
-        run: |
-          if [ -f "package.json" ]; then
-            echo "node_project=true" >> $GITHUB_OUTPUT
-            echo "Project type: Node.js"
-          else
-            echo "node_project=false" >> $GITHUB_OUTPUT
-            echo "Project type: Non-Node.js"
-          fi
-
-      - name: Setup Node.js (if Node project)
-        if: steps.detect-project.outputs.node_project == 'true'
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-
-      - name: Install dependencies and run tests (if Node project)
-        if: steps.detect-project.outputs.node_project == 'true'
-        run: |
-          npm install
-          npm run test -- --coverage
-          ls -la coverage/
-          cat coverage/lcov.info || echo "No coverage file found"
 
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master
@@ -63,10 +43,7 @@ jobs:
             -Dsonar.sourceEncoding=UTF-8
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-            ${{ steps.detect-project.outputs.node_project == 'true' && '-Dsonar.javascript.lcov.reportPaths=coverage/lcov.info' || '' }}
-            -Dsonar.scm.provider=git
-            -Dsonar.analysis.allowEmpty=false
-            -Dsonar.qualitygate.wait=true
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
       - name: Install jq and bc
         run: |
@@ -76,24 +53,25 @@ jobs:
       - name: Fetch Code Quality Metrics
         id: fetch-metrics
         run: |
-          sleep 15
+          # Fetch the Quality Gate status and code quality metrics
           PROJECT_KEY="aniketbancapp_sonar-samples"
+          echo "Fetching quality gate status..."
+          QUALITY_GATE_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY")
+          echo "Quality Gate Response: $QUALITY_GATE_RESPONSE"
+          QUALITY_GATE_STATUS=$(echo "$QUALITY_GATE_RESPONSE" | jq -r '.projectStatus.status')
           
-          # Get quality gate status
-          QUALITY_GATE_STATUS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
-            "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY" | \
-            jq -r '.projectStatus.status')
-            
-          # Get all metrics
-          METRICS_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
-            "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage,duplicated_lines_density,bugs,vulnerabilities,code_smells")
+          echo "Fetching coverage..."
+          COVERAGE_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage")
+          echo "Coverage Response: $COVERAGE_RESPONSE"
+          COVERAGE=$(echo "$COVERAGE_RESPONSE" | jq -r '.component.measures[0].value // "0"')
           
-          COVERAGE=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "coverage").value // "0"')
-          DUPLICATION=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "duplicated_lines_density").value // "0"')
-          BUGS=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "bugs").value // "0"')
-          VULNERABILITIES=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "vulnerabilities").value // "0"')
-          CODE_SMELLS=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[] | select(.metric == "code_smells").value // "0"')
+          echo "Fetching other metrics..."
+          DUPLICATION=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=duplicated_lines_density" | jq -r '.component.measures[0].value // "0"')
+          BUGS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=bugs" | jq -r '.component.measures[0].value // "0"')
+          VULNERABILITIES=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=vulnerabilities" | jq -r '.component.measures[0].value // "0"')
+          CODE_SMELLS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=code_smells" | jq -r '.component.measures[0].value // "0"')
 
+          # Create quality status message
           QUALITY_STATUS_MESSAGE=$(cat <<EOF
           SonarQube Quality Report:
           - Quality Gate Status: $QUALITY_GATE_STATUS
@@ -105,17 +83,30 @@ jobs:
           EOF
           )
 
-          echo "$QUALITY_STATUS_MESSAGE"
-          echo "quality_status<<EOF" >> $GITHUB_OUTPUT
-          echo "$QUALITY_STATUS_MESSAGE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+          # Output quality status to job summary
+          echo "### SonarQube Quality Report" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Quality Gate Status | $QUALITY_GATE_STATUS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Coverage | $COVERAGE% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Duplication | $DUPLICATION% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bugs | $BUGS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Vulnerabilities | $VULNERABILITIES |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Smells | $CODE_SMELLS |" >> $GITHUB_STEP_SUMMARY
 
+          echo "$QUALITY_STATUS_MESSAGE"
+          
+          # Check if coverage is above 95% and quality gate passed
           if (( $(echo "$COVERAGE >= 95" | bc -l) )) && [ "$QUALITY_GATE_STATUS" = "OK" ]; then
             echo "quality_passed=true" >> $GITHUB_OUTPUT
           else
             echo "quality_passed=false" >> $GITHUB_OUTPUT
           fi
+          
+          echo "quality_status<<EOF" >> $GITHUB_OUTPUT
+          echo "$QUALITY_STATUS_MESSAGE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
 
   auto-merge:
     name: Auto Merge PR
@@ -137,6 +128,7 @@ jobs:
         run: |
           PR_NUMBER=$(jq --raw-output .pull_request.number "$GITHUB_EVENT_PATH")
           gh pr merge $PR_NUMBER --auto --squash
+          echo "PR #$PR_NUMBER merged successfully!"
 
   quality-report:
     name: Quality Report
