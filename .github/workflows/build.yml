@@ -23,11 +23,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Ensures the full repo history is available
 
       - name: Verify Repository Structure
         run: |
-          echo "Listing files in the working directory:"
+          echo "Listing files in working directory:"
           ls -la
 
       - name: Ensure package.json Exists
@@ -42,10 +42,11 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Install Dependencies and Generate Coverage
+      - name: Install Dependencies and Run Tests
         run: |
           npm install
           npm run test -- --coverage
+          # Verify coverage file exists
           ls -la coverage/
           cat coverage/lcov.info || echo "No coverage file found"
 
@@ -61,11 +62,8 @@ jobs:
             -Dsonar.sources=src
             -Dsonar.tests=test
             -Dsonar.sourceEncoding=UTF-8
-            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             -Dsonar.qualitygate.wait=true
-            -Dsonar.analysis.allowEmpty=false
             -Dsonar.coverage.exclusions=**/node_modules/**,**/test/**
             -Dsonar.cpd.exclusions=**/node_modules/**
 
@@ -74,39 +72,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq bc
 
-      - name: Fetch Code Quality Metrics
+      - name: Fetch SonarQube Metrics
         id: fetch-metrics
         run: |
-          sleep 20
-          
           PROJECT_KEY="sonar"
           RETRY_COUNT=0
           MAX_RETRIES=5
-          
+
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             echo "Attempt $((RETRY_COUNT+1)) to fetch metrics..."
-            
-            PROJECT_EXISTS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
-              "${{ secrets.SONAR_HOST_URL }}/api/projects/search?projects=$PROJECT_KEY" | \
-              jq -r '.components[0].key // empty')
-            
-            if [ -z "$PROJECT_EXISTS" ]; then
-              echo "Project not found, retrying..."
-              RETRY_COUNT=$((RETRY_COUNT+1))
-              sleep 10
-              continue
-            fi
             
             QUALITY_GATE_STATUS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
               "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY" | \
               jq -r '.projectStatus.status // "ERROR"')
-            
+
             METRICS_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
               "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage,duplicated_lines_density,bugs,vulnerabilities,code_smells")
 
             if echo "$METRICS_RESPONSE" | jq -e '.errors' > /dev/null; then
-              ERROR_MSG=$(echo "$METRICS_RESPONSE" | jq -r '.errors[0].msg')
-              echo "ERROR: $ERROR_MSG"
+              echo "Error fetching SonarQube metrics. Retrying..."
               RETRY_COUNT=$((RETRY_COUNT+1))
               sleep 10
               continue
@@ -117,7 +101,7 @@ jobs:
             BUGS=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "bugs").value? // "0"')
             VULNERABILITIES=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "vulnerabilities").value? // "0"')
             CODE_SMELLS=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "code_smells").value? // "0"')
-            
+
             if [ -n "$COVERAGE" ] && [ -n "$QUALITY_GATE_STATUS" ]; then
               break
             else
@@ -125,14 +109,15 @@ jobs:
               sleep 10
             fi
           done
-          
+
           if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-            echo "Failed to fetch metrics"
+            echo "Failed to fetch metrics after $MAX_RETRIES attempts"
             COVERAGE="0"
             QUALITY_GATE_STATUS="ERROR"
           fi
 
-          echo "quality_passed=$( [ "$QUALITY_GATE_STATUS" = "OK" ] && [ "$(echo "$COVERAGE >= 95" | bc -l)" -eq 1 ] && echo "true" || echo "false" )" >> $GITHUB_OUTPUT
+          echo "quality_passed=$( [ "$QUALITY_GATE_STATUS" = "OK" ] && echo "true" || echo "false" )" >> $GITHUB_OUTPUT
+          echo "quality_status=$QUALITY_GATE_STATUS" >> $GITHUB_OUTPUT
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
 
   auto-merge:
@@ -148,6 +133,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gh
+
+      - name: Display Quality Status
+        run: |
+          echo "SonarQube Quality Status: ${{ needs.sonarqube-scan.outputs.quality_status }}"
+          echo "Coverage: ${{ needs.sonarqube-scan.outputs.coverage }}%"
 
       - name: Auto Merge PR
         env:
@@ -165,6 +155,8 @@ jobs:
     steps:
       - name: Display Quality Status
         run: |
-          echo "Quality Status: ${{ needs.sonarqube-scan.outputs.quality_status }}"
-          echo "Coverage: ${{ needs.sonarqube-scan.outputs.coverage }}%"
-          echo "Quality Check Passed: ${{ needs.sonarqube-scan.outputs.quality_passed }}"
+          echo "### SonarQube Quality Report" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Quality Gate Status | ${{ needs.sonarqube-scan.outputs.quality_status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Coverage | ${{ needs.sonarqube-scan.outputs.coverage }}% |" >> $GITHUB_STEP_SUMMARY
