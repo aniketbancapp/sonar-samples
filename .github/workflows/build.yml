@@ -28,7 +28,7 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
           args: >
-            -Dsonar.projectKey=aniketbancapp_sonar-samples
+            -Dsonar.projectKey=sonar
             -Dsonar.projectName="Sonar Samples"
             -Dsonar.projectVersion=1.0
             -Dsonar.sources=.
