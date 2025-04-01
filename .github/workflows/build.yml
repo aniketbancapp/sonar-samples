@@ -24,6 +24,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master
         env:
@@ -40,17 +45,31 @@ jobs:
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
+      - name: Install jq and bc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq bc
+
       - name: Fetch Code Quality Metrics
         id: fetch-metrics
         run: |
           # Fetch the Quality Gate status and code quality metrics
           PROJECT_KEY="aniketbancapp_sonar-samples"
-          QUALITY_GATE_STATUS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY" | jq -r '.projectStatus.status')
-          COVERAGE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage" | jq -r '.component.measures[0].value')
-          DUPLICATION=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=duplicated_lines_density" | jq -r '.component.measures[0].value')
-          BUGS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=bugs" | jq -r '.component.measures[0].value')
-          VULNERABILITIES=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=vulnerabilities" | jq -r '.component.measures[0].value')
-          CODE_SMELLS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=code_smells" | jq -r '.component.measures[0].value')
+          echo "Fetching quality gate status..."
+          QUALITY_GATE_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY")
+          echo "Quality Gate Response: $QUALITY_GATE_RESPONSE"
+          QUALITY_GATE_STATUS=$(echo "$QUALITY_GATE_RESPONSE" | jq -r '.projectStatus.status')
+          
+          echo "Fetching coverage..."
+          COVERAGE_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage")
+          echo "Coverage Response: $COVERAGE_RESPONSE"
+          COVERAGE=$(echo "$COVERAGE_RESPONSE" | jq -r '.component.measures[0].value // "0"')
+          
+          echo "Fetching other metrics..."
+          DUPLICATION=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=duplicated_lines_density" | jq -r '.component.measures[0].value // "0"')
+          BUGS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=bugs" | jq -r '.component.measures[0].value // "0"')
+          VULNERABILITIES=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=vulnerabilities" | jq -r '.component.measures[0].value // "0"')
+          CODE_SMELLS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=code_smells" | jq -r '.component.measures[0].value // "0"')
 
           # Create quality status message
           QUALITY_STATUS_MESSAGE=$(cat <<EOF
@@ -77,14 +96,16 @@ jobs:
 
           echo "$QUALITY_STATUS_MESSAGE"
           
-          # Check if coverage is above 5% and quality gate passed
-          if (( $(echo "$COVERAGE >= 5" | bc -l) )) && [ "$QUALITY_GATE_STATUS" = "OK" ]; then
+          # Check if coverage is above 95% and quality gate passed
+          if (( $(echo "$COVERAGE >= 95" | bc -l) )) && [ "$QUALITY_GATE_STATUS" = "OK" ]; then
             echo "quality_passed=true" >> $GITHUB_OUTPUT
           else
             echo "quality_passed=false" >> $GITHUB_OUTPUT
           fi
           
-          echo "quality_status=$QUALITY_STATUS_MESSAGE" >> $GITHUB_OUTPUT
+          echo "quality_status<<EOF" >> $GITHUB_OUTPUT
+          echo "$QUALITY_STATUS_MESSAGE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
 
   auto-merge:
