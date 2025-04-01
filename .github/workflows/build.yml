@@ -16,6 +16,8 @@ jobs:
   sonarqube-scan:
     name: SonarQube Scan
     runs-on: ubuntu-latest
+    outputs:
+      quality_passed: ${{ steps.fetch-metrics.outputs.quality_passed }}
     steps:
       - uses: actions/checkout@v3
         with:
@@ -41,25 +43,28 @@ jobs:
         id: fetch-metrics
         run: |
           # Fetch the Quality Gate status and code quality metrics
-          QUALITY_GATE_STATUS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=your_project_key" | jq -r '.projectStatus.status')
-          COVERAGE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=your_project_key&metricKeys=coverage" | jq -r '.component.measures[0].value')
+          # Replace 'your_project_key' with your actual project key
+          PROJECT_KEY="aniketbancapp_sonar-samples"
+          QUALITY_GATE_STATUS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY" | jq -r '.projectStatus.status')
+          COVERAGE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage" | jq -r '.component.measures[0].value')
           echo "Quality Gate Status: $QUALITY_GATE_STATUS"
           echo "Code Coverage: $COVERAGE%"
 
-          # Check if coverage is above 95%
-          if (( $(echo "$COVERAGE >= 95" | bc -l) )); then
-            echo "Code quality is above 95%."
-            echo "::set-output name=quality_passed::true"
+          # Check if coverage is above 95% and quality gate passed
+          if (( $(echo "$COVERAGE >= 95" | bc -l) )) && [ "$QUALITY_GATE_STATUS" = "OK" ]; then
+            echo "Code quality meets requirements."
+            echo "quality_passed=true" >> $GITHUB_OUTPUT
           else
-            echo "Code quality is below 95%."
-            echo "::set-output name=quality_passed::false"
+            echo "Code quality does not meet requirements."
+            echo "quality_passed=false" >> $GITHUB_OUTPUT
           fi
 
   # Job for auto merging PR after SonarQube scan
   auto-merge:
     name: Auto Merge PR
     runs-on: ubuntu-latest
-    needs: sonarqube-scan  # This ensures the merge happens after the scan
+    needs: sonarqube-scan
+    if: needs.sonarqube-scan.outputs.quality_passed == 'true'
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
