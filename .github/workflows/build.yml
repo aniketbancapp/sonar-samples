@@ -38,9 +38,20 @@ jobs:
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
       - name: SonarQube Quality Gate Check
-        uses: sonarsource/sonarqube-quality-gate-action@master
+        id: quality_gate
+        uses: sonarsource/sonarqube-quality-gate-action@v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          sonar_host_url: ${{ secrets.SONAR_HOST_URL }}
+          sonar_token: ${{ secrets.SONAR_TOKEN }}
+        
+      # Fail the job if the quality gate fails
+      - name: Fail if Quality Gate is not passed
+        if: steps.quality_gate.outputs.status != 'OK'
+        run: |
+          echo "SonarQube Quality Gate failed. Code quality is below the required threshold."
+          exit 1
 
   # Job for auto merging PR after SonarQube scan
   auto-merge:
