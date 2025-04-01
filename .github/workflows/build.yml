@@ -12,54 +12,14 @@ permissions:
   contents: write
 
 jobs:
+  # Job for SonarQube scan
   sonarqube-scan:
     name: SonarQube Scan
     runs-on: ubuntu-latest
-    outputs:
-      quality_passed: ${{ steps.fetch-metrics.outputs.quality_passed }}
-      quality_status: ${{ steps.fetch-metrics.outputs.quality_status }}
-      coverage: ${{ steps.fetch-metrics.outputs.coverage }}
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-          path: 'src'  # Explicitly set working directory
-
-      - name: Debug Repository Structure
-        run: |
-          echo "Current working directory: $(pwd)"
-          echo "Repository contents:"
-          ls -R
-
-      - name: Find package.json
-        id: find-package
-        run: |
-          # Search for package.json in the repository
-          PACKAGE_JSON_PATH=$(find . -name package.json -print -quit)
-          
-          if [ -z "$PACKAGE_JSON_PATH" ]; then
-            echo "ERROR: No package.json found in the repository!"
-            exit 1
-          fi
-          
-          echo "Found package.json at: $PACKAGE_JSON_PATH"
-          echo "directory=$(dirname "$PACKAGE_JSON_PATH")" >> $GITHUB_OUTPUT
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-          working-directory: ${{ steps.find-package.outputs.directory }}
-
-      - name: Install Dependencies and Run Tests
-        working-directory: ${{ steps.find-package.outputs.directory }}
-        run: |
-          npm install
-          npm run test -- --coverage
-          # Verify coverage file exists
-          ls -la coverage/
-          cat coverage/lcov.info || echo "No coverage file found"
 
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master
@@ -68,21 +28,14 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
           args: >
-            -Dsonar.projectKey=sonar
+            -Dsonar.projectKey=aniketbancapp_sonar-samples
             -Dsonar.projectName="Sonar Samples"
-            -Dsonar.sources=${{ steps.find-package.outputs.directory }}
-            -Dsonar.tests=${{ steps.find-package.outputs.directory }}/test
+            -Dsonar.projectVersion=1.0
+            -Dsonar.sources=.
             -Dsonar.sourceEncoding=UTF-8
-            -Dsonar.javascript.lcov.reportPaths=${{ steps.find-package.outputs.directory }}/coverage/lcov.info
-            -Dsonar.qualitygate.wait=true
-            -Dsonar.coverage.exclusions=**/node_modules/**,**/test/**
-            -Dsonar.cpd.exclusions=**/node_modules/**
-
-      # Rest of your workflow remains the same...
-      - name: Install jq and bc
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq bc
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
       - name: Fetch SonarQube Metrics
         id: fetch-metrics
