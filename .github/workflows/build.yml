@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Required for proper analysis
+          fetch-depth: 0
 
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master
@@ -20,19 +20,16 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
           args: >
-            -Dsonar.projectKey=${{ github.repository }}
-            -Dsonar.projectName="${{ github.repository }}"
+            -Dsonar.projectKey=aniketbancapp_sonar-samples
+            -Dsonar.projectName="Sonar Samples"
             -Dsonar.projectVersion=1.0
             -Dsonar.sources=.
             -Dsonar.sourceEncoding=UTF-8
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info  # For JS projects
-            -Dsonar.java.binaries=target/classes  # For Java projects
-            -Dsonar.python.coverage.reportPaths=coverage.xml  # For Python projects
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
       - name: SonarQube Quality Gate Check
         uses: sonarsource/sonarqube-quality-gate-action@master
-        timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
