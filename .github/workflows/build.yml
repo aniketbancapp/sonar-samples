@@ -29,6 +29,14 @@ jobs:
         with:
           node-version: '18'
 
+      - name: Install dependencies and generate coverage
+        run: |
+          npm install
+          npm run test -- --coverage
+          # Verify coverage file exists
+          ls -la coverage/
+          cat coverage/lcov.info || echo "No coverage file found"
+
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master
         env:
@@ -38,12 +46,16 @@ jobs:
           args: >
             -Dsonar.projectKey=sonar
             -Dsonar.projectName="Sonar Samples"
-            -Dsonar.projectVersion=1.0
-            -Dsonar.sources=.
+            -Dsonar.sources=src
+            -Dsonar.tests=test
             -Dsonar.sourceEncoding=UTF-8
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.analysis.allowEmpty=false
+            -Dsonar.coverage.exclusions=**/node_modules/**,**/test/**
+            -Dsonar.cpd.exclusions=**/node_modules/**
 
       - name: Install jq and bc
         run: |
@@ -53,23 +65,67 @@ jobs:
       - name: Fetch Code Quality Metrics
         id: fetch-metrics
         run: |
-          # Fetch the Quality Gate status and code quality metrics
+          # Wait for analysis to complete
+          sleep 20
+          
           PROJECT_KEY="sonar"
-          echo "Fetching quality gate status..."
-          QUALITY_GATE_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY")
-          echo "Quality Gate Response: $QUALITY_GATE_RESPONSE"
-          QUALITY_GATE_STATUS=$(echo "$QUALITY_GATE_RESPONSE" | jq -r '.projectStatus.status')
+          RETRY_COUNT=0
+          MAX_RETRIES=5
           
-          echo "Fetching coverage..."
-          COVERAGE_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage")
-          echo "Coverage Response: $COVERAGE_RESPONSE"
-          COVERAGE=$(echo "$COVERAGE_RESPONSE" | jq -r '.component.measures[0].value // "0"')
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "Attempt $((RETRY_COUNT+1)) to fetch metrics..."
+            
+            # Verify project exists first
+            PROJECT_EXISTS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
+              "${{ secrets.SONAR_HOST_URL }}/api/projects/search?projects=$PROJECT_KEY" | \
+              jq -r '.components[0].key // empty')
+            
+            if [ -z "$PROJECT_EXISTS" ]; then
+              echo "Project not found, retrying..."
+              RETRY_COUNT=$((RETRY_COUNT+1))
+              sleep 10
+              continue
+            fi
+            
+            # Get quality gate status
+            QUALITY_GATE_STATUS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
+              "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY" | \
+              jq -r '.projectStatus.status // "ERROR"')
+            
+            # Get all metrics in one call
+            METRICS_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
+              "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=coverage,duplicated_lines_density,bugs,vulnerabilities,code_smells")
+            
+            # Check for API errors
+            if echo "$METRICS_RESPONSE" | jq -e '.errors' > /dev/null; then
+              ERROR_MSG=$(echo "$METRICS_RESPONSE" | jq -r '.errors[0].msg')
+              echo "ERROR: $ERROR_MSG"
+              echo "Check token permissions (needs 'Browse')"
+              RETRY_COUNT=$((RETRY_COUNT+1))
+              sleep 10
+              continue
+            fi
+            
+            # Parse metrics with defaults
+            COVERAGE=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "coverage").value? // "0"')
+            DUPLICATION=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "duplicated_lines_density").value? // "0"')
+            BUGS=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "bugs").value? // "0"')
+            VULNERABILITIES=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "vulnerabilities").value? // "0"')
+            CODE_SMELLS=$(echo "$METRICS_RESPONSE" | jq -r '.component.measures[]? | select(.metric == "code_smells").value? // "0"')
+            
+            if [ -n "$COVERAGE" ] && [ -n "$QUALITY_GATE_STATUS" ]; then
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT+1))
+              sleep 10
+            fi
+          done
           
-          echo "Fetching other metrics..."
-          DUPLICATION=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=duplicated_lines_density" | jq -r '.component.measures[0].value // "0"')
-          BUGS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=bugs" | jq -r '.component.measures[0].value // "0"')
-          VULNERABILITIES=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=vulnerabilities" | jq -r '.component.measures[0].value // "0"')
-          CODE_SMELLS=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=$PROJECT_KEY&metricKeys=code_smells" | jq -r '.component.measures[0].value // "0"')
+          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+            echo "Failed to fetch metrics after $MAX_RETRIES attempts"
+            COVERAGE="0"
+            QUALITY_GATE_STATUS="ERROR"
+          fi
 
           # Create quality status message
           QUALITY_STATUS_MESSAGE=$(cat <<EOF
@@ -83,7 +139,7 @@ jobs:
           EOF
           )
 
-          # Output quality status to job summary
+          # Output to GitHub summary
           echo "### SonarQube Quality Report" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -116,6 +172,11 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Install GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh
 
       - name: Display Quality Status
         run: |
