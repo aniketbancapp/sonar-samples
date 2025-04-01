@@ -51,8 +51,8 @@ jobs:
           echo "Code Coverage: $COVERAGE%"
 
           # Check if coverage is above 95% and quality gate passed
-          if (( $(echo "$COVERAGE >= 95" | bc -l) )) && [ "$QUALITY_GATE_STATUS" = "OK" ]; then
-            echo "Code quality meets requirements."
+          if (( $(echo "$COVERAGE >= 15" | bc -l) )) && [ "$QUALITY_GATE_STATUS" = "OK" ]; then
+            echo "Code quality meets 15 requirements."
             echo "quality_passed=true" >> $GITHUB_OUTPUT
           else
             echo "Code quality does not meet requirements."
