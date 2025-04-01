@@ -54,7 +54,7 @@ jobs:
         id: fetch-metrics
         run: |
           # Fetch the Quality Gate status and code quality metrics
-          PROJECT_KEY="aniketbancapp_sonar-samples"
+          PROJECT_KEY="sonar"
           echo "Fetching quality gate status..."
           QUALITY_GATE_RESPONSE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=$PROJECT_KEY")
           echo "Quality Gate Response: $QUALITY_GATE_RESPONSE"
