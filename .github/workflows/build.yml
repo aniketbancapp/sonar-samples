@@ -37,6 +37,21 @@ jobs:
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
+      # Fetch SonarQube metrics and check code coverage
+      - name: Get SonarQube Project Metrics
+        id: get_metrics
+        run: |
+          # Fetch the SonarQube project metrics using SonarQube API
+          SONAR_PROJECT_KEY="aniketbancapp_sonar-samples"
+          COVERAGE=$(curl -s -u ${{ secrets.SONAR_TOKEN }} "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=${SONAR_PROJECT_KEY}&metricKeys=coverage" | jq -r '.component.measures[0].value')
+          echo "Code coverage is: $COVERAGE"
+
+          # Check if the coverage is below 95%
+          if (( $(echo "$COVERAGE < 95" | bc -l) )); then
+            echo "Error: Code coverage is below 95%. Coverage: $COVERAGE%"
+            exit 1  # Fail the job
+          fi
+
       - name: SonarQube Quality Gate Check
         id: quality_gate
         uses: sonarsource/sonarqube-quality-gate-action@v2
@@ -45,13 +60,6 @@ jobs:
         with:
           sonar_host_url: ${{ secrets.SONAR_HOST_URL }}
           sonar_token: ${{ secrets.SONAR_TOKEN }}
-        
-      # Fail the job if the quality gate fails
-      - name: Fail if Quality Gate is not passed
-        if: steps.quality_gate.outputs.status != 'OK'
-        run: |
-          echo "SonarQube Quality Gate failed. Code quality is below the required threshold."
-          exit 1
 
   # Job for auto merging PR after SonarQube scan
   auto-merge:
